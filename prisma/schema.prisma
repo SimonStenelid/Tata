@@ -1,0 +1,208 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── Money movements ──────────────────────────────────────────────────────────
+
+model Transaction {
+  id          String   @id @default(cuid())
+  date        DateTime
+  amount      Float    // always positive; sign implied by 'type'
+  type        TxType   // INCOME | EXPENSE
+  description String?
+  notes       String?  // free-form, agent can write here
+
+  // Free-text label for which card / rail the transaction came through.
+  // Known values today: "Handelsbanken", "Amex Platinum", "Swish", "Cash".
+  // Add new ones without a migration; agent should match case-insensitively.
+  source      String?
+
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  // Hash of (date, amount, description, source) for idempotent ingestion.
+  importHash  String?  @unique
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date])
+  @@index([source])
+  @@index([categoryId])
+}
+
+model Category {
+  id           String        @id @default(cuid())
+  name         String        @unique
+  kind         CategoryKind
+  color        String?
+  transactions Transaction[]
+}
+
+// Cards / rails the user can ingest from. `keyword` is what the user types
+// after /add (e.g. "debit", "amex") AND what gets written into
+// Transaction.source — agent JOINs Card to resolve keyword → label.
+model Card {
+  keyword   String   @id           // stable identifier, also Transaction.source
+  label     String                 // human-readable name, e.g. "Handelsbanken"
+  kind      CardKind               // DEBIT | CREDIT
+  createdAt DateTime @default(now())
+}
+
+// ─── Holdings ─────────────────────────────────────────────────────────────────
+
+model Asset {
+  id          String    @id @default(cuid())
+  name        String
+  type        AssetType
+
+  // Currency that 'avgBuyPrice' is denominated in (e.g. 'USD' for AAPL on Avanza).
+  currency    String    @default("SEK")
+
+  ticker      String?   // Yahoo symbol; null for real estate / vehicles
+  quantity    Float?
+  avgBuyPrice Float?
+
+  // For non-ticker assets ONLY (real estate, vehicles, collectibles).
+  manualValue     Float?
+  manualValueAsOf DateTime?
+
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Loan {
+  id             String    @id @default(cuid())
+  name           String
+  type           LoanType
+  originalAmount Float
+  currentBalance Float
+  interestRate   Float     @default(0)
+  currency       String    @default("SEK")
+  startDate      DateTime?
+  endDate        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+// ─── Agent memory ─────────────────────────────────────────────────────────────
+
+model Conversation {
+  id           String    @id @default(cuid())
+  chatId       String    @unique          // Telegram chat id
+  title        String?
+  lastActiveAt DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  messages     Message[]
+}
+
+// Stores each turn as the Anthropic message-content array verbatim.
+// Replayed directly on the next API call — preserves text + tool_use + tool_result blocks.
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  role           MessageRole  // USER | ASSISTANT
+  contentJson    String       // JSON array of content blocks, replayed verbatim
+  textPreview    String?      // denormalised text for cheap LIKE search
+
+  inputTokens         Int?
+  outputTokens        Int?
+  cacheReadTokens     Int?
+  cacheCreationTokens Int?
+  stopReason          String?
+
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+// Persistent market data cache. Survives restarts; agent can reason about staleness.
+model MarketQuote {
+  id               String   @id @default(cuid())
+  symbol           String
+  priceOriginal    Float
+  currencyOriginal String
+  priceSek         Float
+  fxToSek          Float
+  asOf             DateTime // Yahoo's regularMarketTime
+  fetchedAt        DateTime @default(now())
+
+  @@unique([symbol, asOf])
+  @@index([symbol, fetchedAt])
+}
+
+// Per-user durable facts written by Claude via the memory tool. The model sees
+// a virtual filesystem rooted at /memories; each file is one row here, scoped
+// by Telegram user id. Distinct from Conversation/Message (which is the
+// short-term transcript).
+model MemoryFile {
+  userId    Int
+  path      String   // always starts with "/memories/"
+  content   String
+  updatedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@id([userId, path])
+}
+
+// Idempotent ingestion log — replaces ad-hoc seed scripts.
+model IngestionRun {
+  id          String    @id @default(cuid())
+  source      String    // "handelsbanken-pdf", "amex-xlsx", "manual"
+  filename    String?
+  periodStart DateTime?
+  periodEnd   DateTime?
+  rowsAdded   Int       @default(0)
+  rowsSkipped Int       @default(0)
+  notes       String?
+  createdAt   DateTime  @default(now())
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum AssetType {
+  STOCK
+  FUND
+  CRYPTO
+  REAL_ESTATE
+  VEHICLE
+  COLLECTIBLE
+  OTHER
+}
+
+enum LoanType {
+  MORTGAGE
+  CAR
+  STUDENT
+  PERSONAL
+  CREDIT_LINE
+  OTHER
+}
+
+enum CategoryKind {
+  INCOME
+  EXPENSE
+}
+
+enum CardKind {
+  DEBIT
+  CREDIT
+}
+
+enum TxType {
+  INCOME
+  EXPENSE
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
