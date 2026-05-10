@@ -1,5 +1,7 @@
 # Tata
 
+![Tata](./tata_cover.JPG)
+
 Agent-first personal finance helper. A Telegram bot backed by Claude that
 answers free-text questions by writing SQL against a local SQLite database,
 and ingests bank/card PDF statements into that same database.
