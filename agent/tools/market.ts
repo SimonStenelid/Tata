@@ -12,6 +12,8 @@ const SEARCH_TTL_MS = 10 * 60_000
 const MAX_QUOTE_SYMBOLS = 25
 const MAX_HISTORICAL_POINTS = 400
 
+const DEFAULT_TARGET_CURRENCY = "SEK"
+
 type CacheEntry<T> = { value: T; expiresAt: number }
 const cache = new Map<string, CacheEntry<unknown>>()
 
@@ -29,18 +31,19 @@ function setCached<T>(key: string, value: T, ttlMs: number): void {
   cache.set(key, { value, expiresAt: Date.now() + ttlMs })
 }
 
-async function getFxToSek(currency: string): Promise<number> {
-  const ccy = currency.toUpperCase()
-  if (ccy === "SEK") return 1
-  const key = `fx:${ccy}`
+async function getFxRate(from: string, to: string): Promise<number> {
+  const src = from.toUpperCase()
+  const dst = to.toUpperCase()
+  if (src === dst) return 1
+  const key = `fx:${src}:${dst}`
   const cached = getCached<number>(key)
   if (cached !== undefined) return cached
 
-  const symbol = `${ccy}SEK=X`
+  const symbol = `${src}${dst}=X`
   const q = await yf.quote(symbol)
   const rate = q?.regularMarketPrice
   if (typeof rate !== "number" || !isFinite(rate) || rate <= 0) {
-    throw new Error(`Could not resolve FX rate ${ccy}→SEK (symbol ${symbol})`)
+    throw new Error(`Could not resolve FX rate ${src}→${dst} (symbol ${symbol})`)
   }
   setCached(key, rate, FX_TTL_MS)
   return rate
@@ -49,17 +52,21 @@ async function getFxToSek(currency: string): Promise<number> {
 export type QuoteResult = {
   symbol: string
   name: string | null
-  priceSek: number
+  priceUser: number
   priceOriginal: number
   currencyOriginal: string
-  fxToSek: number
+  currencyUser: string
+  fxToUser: number
   marketState: string | null
   asOf: string | null
 }
 
 export type ToolError = { symbol?: string; error: string }
 
-async function opQuote(symbols: string[]): Promise<{ quotes: QuoteResult[]; errors: ToolError[] }> {
+async function opQuote(
+  symbols: string[],
+  targetCurrency: string,
+): Promise<{ quotes: QuoteResult[]; errors: ToolError[] }> {
   if (!Array.isArray(symbols) || symbols.length === 0) {
     throw new Error("symbols must be a non-empty array")
   }
@@ -67,12 +74,13 @@ async function opQuote(symbols: string[]): Promise<{ quotes: QuoteResult[]; erro
     throw new Error(`max ${MAX_QUOTE_SYMBOLS} symbols per quote call`)
   }
 
+  const target = targetCurrency.toUpperCase()
   const quotes: QuoteResult[] = []
   const errors: ToolError[] = []
   const toFetch: string[] = []
 
   for (const s of symbols) {
-    const cached = getCached<QuoteResult>(`quote:${s}`)
+    const cached = getCached<QuoteResult>(`quote:${s}:${target}`)
     if (cached) quotes.push(cached)
     else toFetch.push(s)
   }
@@ -102,21 +110,22 @@ async function opQuote(symbols: string[]): Promise<{ quotes: QuoteResult[]; erro
         errors.push({ symbol: q.symbol, error: "no regularMarketPrice" })
         continue
       }
-      const fx = await getFxToSek(ccy)
+      const fx = await getFxRate(ccy, target)
       const result: QuoteResult = {
         symbol: q.symbol,
         name:
           ("shortName" in q && typeof q.shortName === "string" && q.shortName) ||
           ("longName" in q && typeof q.longName === "string" && q.longName) ||
           null,
-        priceSek: price * fx,
+        priceUser: price * fx,
         priceOriginal: price,
         currencyOriginal: ccy,
-        fxToSek: fx,
+        currencyUser: target,
+        fxToUser: fx,
         marketState: q.marketState ?? null,
         asOf: q.regularMarketTime ? new Date(q.regularMarketTime).toISOString() : null,
       }
-      setCached(`quote:${q.symbol}`, result, QUOTE_TTL_MS)
+      setCached(`quote:${q.symbol}:${target}`, result, QUOTE_TTL_MS)
       quotes.push(result)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -129,7 +138,7 @@ async function opQuote(symbols: string[]): Promise<{ quotes: QuoteResult[]; erro
 
 export type HistoricalPoint = {
   date: string
-  closeSek: number
+  closeUser: number
   closeOriginal: number
 }
 
@@ -138,23 +147,27 @@ async function opHistorical(args: {
   from: string
   to?: string
   interval?: "1d" | "1wk" | "1mo"
+  targetCurrency: string
 }): Promise<{
   symbol: string
   currencyOriginal: string
-  fxToSek: number
+  currencyUser: string
+  fxToUser: number
   interval: string
   points: HistoricalPoint[]
   truncated: boolean
 }> {
-  const { symbol, from, to, interval = "1d" } = args
+  const { symbol, from, to, interval = "1d", targetCurrency } = args
   if (!symbol || typeof symbol !== "string") throw new Error("symbol required")
   if (!from || typeof from !== "string") throw new Error("from (YYYY-MM-DD) required")
 
-  const key = `hist:${symbol}:${from}:${to ?? "now"}:${interval}`
+  const target = targetCurrency.toUpperCase()
+  const key = `hist:${symbol}:${from}:${to ?? "now"}:${interval}:${target}`
   const cached = getCached<{
     symbol: string
     currencyOriginal: string
-    fxToSek: number
+    currencyUser: string
+    fxToUser: number
     interval: string
     points: HistoricalPoint[]
     truncated: boolean
@@ -168,7 +181,7 @@ async function opHistorical(args: {
 
   const meta = await yf.quote(symbol)
   const ccy = (meta?.currency ?? "USD").toUpperCase()
-  const fx = await getFxToSek(ccy)
+  const fx = await getFxRate(ccy, target)
 
   const rows = await yf.historical(symbol, {
     period1,
@@ -180,7 +193,7 @@ async function opHistorical(args: {
     .filter((r) => typeof r.close === "number" && isFinite(r.close))
     .map((r) => ({
       date: r.date.toISOString().slice(0, 10),
-      closeSek: (r.close as number) * fx,
+      closeUser: (r.close as number) * fx,
       closeOriginal: r.close as number,
     }))
 
@@ -191,7 +204,8 @@ async function opHistorical(args: {
   const result = {
     symbol,
     currencyOriginal: ccy,
-    fxToSek: fx,
+    currencyUser: target,
+    fxToUser: fx,
     interval,
     points: capped,
     truncated,
@@ -264,17 +278,27 @@ async function opSummary(symbol: string, modules?: string[]): Promise<unknown> {
 }
 
 export type MarketDataInput =
-  | { op: "quote"; symbols: string[] }
-  | { op: "historical"; symbol: string; from: string; to?: string; interval?: "1d" | "1wk" | "1mo" }
+  | { op: "quote"; symbols: string[]; targetCurrency?: string }
+  | {
+      op: "historical"
+      symbol: string
+      from: string
+      to?: string
+      interval?: "1d" | "1wk" | "1mo"
+      targetCurrency?: string
+    }
   | { op: "search"; query: string }
   | { op: "summary"; symbol: string; modules?: string[] }
 
 export async function marketData(input: MarketDataInput): Promise<unknown> {
   switch (input.op) {
     case "quote":
-      return opQuote(input.symbols)
+      return opQuote(input.symbols, input.targetCurrency ?? DEFAULT_TARGET_CURRENCY)
     case "historical":
-      return opHistorical(input)
+      return opHistorical({
+        ...input,
+        targetCurrency: input.targetCurrency ?? DEFAULT_TARGET_CURRENCY,
+      })
     case "search":
       return opSearch(input.query)
     case "summary":
@@ -285,4 +309,3 @@ export async function marketData(input: MarketDataInput): Promise<unknown> {
     }
   }
 }
-

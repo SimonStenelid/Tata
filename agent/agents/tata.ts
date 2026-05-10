@@ -37,11 +37,20 @@ const marketDataInputSchema = z
     interval: z.enum(["1d", "1wk", "1mo"]).optional(),
     query: z.string().optional(),
     modules: z.array(z.string()).optional(),
+    targetCurrency: z
+      .string()
+      .length(3)
+      .optional()
+      .describe(
+        "ISO-4217 code to convert prices into (e.g. 'SEK', 'USD', 'EUR'). " +
+          "Pass the user's currency from /memories/profile.md. Applies to quote and historical.",
+      ),
   })
   .describe(
     "Yahoo Finance lookup. Required fields by op: " +
       "quote → symbols (≤25); historical → symbol + from (YYYY-MM-DD), optional to/interval; " +
-      "search → query; summary → symbol, optional modules.",
+      "search → query; summary → symbol, optional modules. " +
+      "quote/historical also accept targetCurrency to convert prices into the user's currency.",
   )
 
 export type AskCategoryHook = (
@@ -91,9 +100,10 @@ function buildTools(userId: number, hooks: RunTataHooks) {
   const marketDataTool = betaZodTool({
     name: "market_data",
     description:
-      "Fetch live and historical market data from Yahoo Finance. ALL prices are returned in SEK " +
-      "(originals included for transparency, plus the FX rate used). Use after run_sql has " +
-      "returned Asset rows with a non-null ticker — multiply quantity * priceSek for current " +
+      "Fetch live and historical market data from Yahoo Finance. Prices are converted to the " +
+      "user's currency (pass `targetCurrency`, e.g. 'USD' or 'EUR'; defaults to 'SEK' if omitted). " +
+      "Originals are always included alongside, plus the FX rate used. Use after run_sql has " +
+      "returned Asset rows with a non-null ticker — multiply quantity * priceUser for current " +
       "value, compare against quantity * avgBuyPrice for unrealized P/L. Operations:\n" +
       " - quote:      current price for up to 25 symbols\n" +
       " - historical: OHLC time series for one symbol (YYYY-MM-DD range, optional interval)\n" +

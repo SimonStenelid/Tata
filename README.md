@@ -18,7 +18,7 @@ Q&A, statement ingest, edits, onboarding — runs through the same agent.
 ### Tools the agent has
 
 - `run_sql(sql)` — single SELECT against the local SQLite DB (read-only, 200-row cap).
-- `market_data(...)` — Yahoo Finance: quotes, historicals, search, fundamentals. All prices returned in SEK.
+- `market_data(...)` — Yahoo Finance: quotes, historicals, search, fundamentals. Prices converted to the user's currency (from `/memories/profile.md`), with originals + FX rate included.
 - `apply_changes(...)` — the only write path. Shows a Telegram confirm keyboard before committing inserts, updates, deletes, or raw SQL.
 - `memory` — Anthropic's beta memory tool. A per-user virtual filesystem at `/memories/` where the agent stores durable facts about you (profile, goals, preferences, ingest skip-rules, the financial stance you picked).
 - `load_skill(name)` — pulls in a markdown skill brief on demand.
