@@ -11,3 +11,5 @@ src/generated
 *CLAUDE.md
 .vscode/
 .idea/
+.claude
+TODO.md

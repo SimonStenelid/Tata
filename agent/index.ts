@@ -1,11 +1,13 @@
 import { run } from "@grammyjs/runner"
 import { config } from "./config.js"
 import { startReminders } from "./telegram/reminders.js"
+import { startCommitmentTick } from "./telegram/commitment-tick.js"
 import { createBot } from "./telegram/bot.js"
 
 async function main() {
   const bot = createBot()
   startReminders(bot)
+  startCommitmentTick(bot)
 
   console.log(
     `[start] db=${config.dbPath} model=${config.model} allowed=${[...config.allowedUserIds].join(",")}`,

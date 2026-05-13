@@ -21,6 +21,7 @@ import { readStance } from "../memory/stance.js"
 import type { CategoryKind } from "../db/categories.js"
 import { getSkillContent, listSkillNames } from "../tools/load-skill.js"
 import { buildApplyChangesTool } from "../tools/apply-changes.js"
+import { buildCommitmentTools } from "../tools/commitments.js"
 
 const client = new Anthropic({ apiKey: config.anthropicApiKey })
 
@@ -150,12 +151,15 @@ function buildTools(userId: number, hooks: RunTataHooks) {
 
   const memoryTool = betaMemoryTool(memoryHandlersFor(userId))
 
+  const commitmentTools = buildCommitmentTools(userId)
+
   return [
     runSqlTool,
     marketDataTool,
     applyChangesTool,
     loadSkillTool,
     memoryTool,
+    ...commitmentTools,
   ]
 }
 

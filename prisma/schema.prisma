@@ -153,6 +153,27 @@ model MemoryFile {
   @@id([userId, path])
 }
 
+// Agent-managed scheduled tasks. The user describes a recurring check in plain
+// text; Tata proposes one of these, the user confirms, and the tick loop runs
+// runTata with `prompt` as a synthetic user turn when nextRunAt is due.
+model Commitment {
+  id        String           @id @default(cuid())
+  userId    Int                                 // Telegram user id (matches MemoryFile.userId)
+  title     String                              // short label, e.g. "Weekly grocery check"
+  prompt    String                              // injected as a synthetic user turn at fire time
+  cron      String                              // 5-field cron expression
+  timezone  String           @default("Europe/Stockholm")
+  status    CommitmentStatus @default(ACTIVE)
+  nextRunAt DateTime                            // tick loop scans on this
+  lastRunAt DateTime?
+  lastError String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([userId, status])
+  @@index([status, nextRunAt])
+}
+
 // Idempotent ingestion log — replaces ad-hoc seed scripts.
 model IngestionRun {
   id          String    @id @default(cuid())
@@ -205,4 +226,10 @@ enum TxType {
 enum MessageRole {
   USER
   ASSISTANT
+}
+
+enum CommitmentStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
 }
